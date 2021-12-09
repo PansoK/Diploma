@@ -92,9 +92,9 @@ class MultiheadAttentionComp(nn.Module):
         #################
         # competitive format
 
-        assert (cfg_comp.attention_competition_type == "softmax" or cfg_comp.attention_competition_type == "step")
+        assert (cfg_comp.attention_competition_type == "softmax" or cfg_comp.attention_competition_type == "step" or cfg_comp.attention_competition_type == "both")
         self.attention_competition_type = cfg_comp.attention_competition_type
-        if self.attention_competition_type == "step":
+        if self.attention_competition_type == "step" or cfg_comp.attention_competition_type == "both":
             self.attention_heads_inactive = self.cfg_comp.attention_heads_inactive
             assert self.attention_heads_inactive < self.num_heads
 
@@ -108,7 +108,7 @@ class MultiheadAttentionComp(nn.Module):
         self.activation_fn = utils.get_activation_fn(activation=cfg.activation_fn)
         # signature of each head
         self.using_weights_for_signatures = self.cfg_comp.attention_using_head_weigts
-        if not cfg_comp.attention_using_head_weigts:
+        if not self.using_weights_for_signatures:
             self.head_signatures = nn.Parameter(torch.Tensor(
                 self.num_heads,
                 self.cfg_comp.attention_heads_signature_dim
@@ -129,26 +129,27 @@ class MultiheadAttentionComp(nn.Module):
             self.quant_noise_block_size,
         )
         # mlp that will produce signature vectors
-        self.inf_sign_fc1 = self.build_fc1(
-            3*self.head_dim*(1 + self.embed_dim),
-            self.cfg_comp.attention_heads_inference_mlp_hidden,
-            self.quant_noise,
-            self.quant_noise_block_size,
-        )
-        self.inf_sign_fc2 = self.build_fc2(
-            self.cfg_comp.attention_heads_inference_mlp_hidden,
-            self.cfg_comp.attention_heads_signature_dim,
-            self.quant_noise,
-            self.quant_noise_block_size,
-        )
-        '''   -> IF USED DON'T FORGET THE RESET PROCESS
-        self.inf_sign_fc3 = self.build_fc2(
-            self.cfg_comp.attention_heads_inference_mlp_hidden,
-            self.cfg_comp.attention_heads_signature_dim,
-            self.quant_noise,
-            self.quant_noise_block_size,
-        )
-        '''
+        if self.using_weights_for_signatures:
+            self.inf_sign_fc1 = self.build_fc1(
+                3*self.head_dim*(1 + self.embed_dim),
+                self.cfg_comp.attention_heads_inference_mlp_hidden,
+                self.quant_noise,
+                self.quant_noise_block_size,
+            )
+            self.inf_sign_fc2 = self.build_fc2(
+                self.cfg_comp.attention_heads_inference_mlp_hidden,
+                self.cfg_comp.attention_heads_signature_dim,
+                self.quant_noise,
+                self.quant_noise_block_size,
+            )
+            ''' -> IF USED DON'T FORGET THE RESET PROCESS
+            self.inf_sign_fc3 = self.build_fc2(
+                self.cfg_comp.attention_heads_inference_mlp_hidden,
+                self.cfg_comp.attention_heads_signature_dim,
+                self.quant_noise,
+                self.quant_noise_block_size,
+            )
+            '''
         #################
 
         self.reset_parameters(cfg)
@@ -167,8 +168,8 @@ class MultiheadAttentionComp(nn.Module):
             nn.init.xavier_uniform_(self.q_proj.weight, gain=1 / math.sqrt(2))
             nn.init.xavier_uniform_(self.inf_fc1.weight, gain=nn.init.calculate_gain(cfg.activation_fn))
             nn.init.xavier_uniform_(self.inf_fc2.weight, gain=nn.init.calculate_gain(cfg.activation_fn))
-            if self.attention_using_head_weigts:
-                nn.init.xavier_uniform_(self.inf_sign_fc1.weight, gain=nn.init.calculate_gain(cfg.activation_fn))
+            if self.using_weights_for_signatures:   
+                nn.init.xavier_uniform_(self.inf_sign_fc1.weight, gain=nn.init.calculate_gain(cfg.activation_fn))   
                 nn.init.xavier_uniform_(self.inf_sign_fc2.weight, gain=nn.init.calculate_gain(cfg.activation_fn))
         else:
             nn.init.xavier_uniform_(self.k_proj.weight)
@@ -176,11 +177,11 @@ class MultiheadAttentionComp(nn.Module):
             nn.init.xavier_uniform_(self.q_proj.weight)
             nn.init.xavier_uniform_(self.inf_fc1.weight)
             nn.init.xavier_uniform_(self.inf_fc2.weight)
-            if self.attention_using_head_weigts:
-                nn.init.xavier_uniform_(self.inf_sign_fc1.weight)
+            if self.using_weights_for_signatures:   
+                nn.init.xavier_uniform_(self.inf_sign_fc1.weight)   
                 nn.init.xavier_uniform_(self.inf_sign_fc2.weight)
 
-        if not self.cfg_comp.attention_using_head_weigts:
+        if not self.using_weights_for_signatures:
             nn.init.xavier_normal_(self.head_signatures)
 
         nn.init.xavier_uniform_(self.out_proj.weight)
@@ -233,14 +234,13 @@ class MultiheadAttentionComp(nn.Module):
         return x
 
 
-
     def inference_masking_step(self, x):
         """
         Args:
             x (Tensor): input to the ffns `(seq_len, batch, embed_dim)`
 
         Returns:
-            attention heads mask equal to 1 at heads that will be dropped, of shape '(batch, number_of_heads, seq_len)'
+            attention heads mask equal to 0 at heads that will be dropped, of shape '(batch, number_of_heads, seq_len)'
         """
 
         t_size = (x.size(0), x.size(1), self.num_heads)
@@ -254,11 +254,12 @@ class MultiheadAttentionComp(nn.Module):
         t = self.inference_activation_dropout_module(t)
         t = self.inf_fc2(t)
 
-        if self.cfg_comp.attention_using_head_weigts:
+        if self.using_weights_for_signatures:
             head_signatures = self.compute_signatures_from_weights()
             t = torch.matmul(t, head_signatures.transpose(0, 1))  # of (seq_len, batch, n_of_heads)
         else:
             t = torch.matmul(t, self.head_signatures.transpose(0, 1))  # of (seq_len, batch, n_of_heads)
+            
         #print(t.transpose(0, 2)[:, 0, :])
 
         topk, ind = t.topk(t.size()[2], dim=2)
@@ -273,25 +274,62 @@ class MultiheadAttentionComp(nn.Module):
 
         return c.transpose(0, 2).transpose(1, 0)
 
+
     def inference_masking_softmax(self, x):
         """
         Args:
             x (Tensor): input to the ffns `(seq_len, batch, embed_dim)`
 
         Returns:
-            attention heads mask equal to 1 at heads that will be dropped, of shape '(batch, number_of_heads, seq_len)'
+            softmax weights for each head per position, of shape '(batch, number_of_heads, seq_len)'
         """
 
         t = self.activation_fn(self.inf_fc1(x))
         t = self.inference_activation_dropout_module(t)
         t = self.inf_fc2(t)
 
-        if self.cfg_comp.attention_using_head_weigts:
+        if self.using_weights_for_signatures:
             head_signatures = self.compute_signatures_from_weights()
             t = torch.matmul(t, head_signatures.transpose(0, 1))  # of (seq_len, batch, n_of_heads)
         else:
             t = torch.matmul(t, self.head_signatures.transpose(0, 1))  # of (seq_len, batch, n_of_heads)
         c = nn.functional.softmax(t, dim=2)
+
+        return c.transpose(0, 2).transpose(1, 0)
+
+
+    def inference_masking_step_softmax(self, x):
+        """
+        Args:
+            x (Tensor): input to the ffns `(seq_len, batch, embed_dim)`
+
+        Returns:
+            attention heads mask equal to 0 at heads that will be droppe and softmax weights for the rest of the heads per position,
+            of shape '(batch, number_of_heads, seq_len)'
+        """
+
+        t_size = (x.size(0), x.size(1), self.num_heads)
+        res2 = Variable(torch.ones(t_size, device=x.get_device()))*(-10**9)  # requires_grad=False maybe
+
+        t = self.activation_fn(self.inf_fc1(x))
+        t = self.inference_activation_dropout_module(t)
+        t = self.inf_fc2(t)
+
+        if self.using_weights_for_signatures:
+            head_signatures = self.compute_signatures_from_weights()
+            t = torch.matmul(t, head_signatures.transpose(0, 1))  # of (seq_len, batch, n_of_heads)
+        else:
+            t = torch.matmul(t, self.head_signatures.transpose(0, 1))  # of (seq_len, batch, n_of_heads)
+        #print(t.transpose(0, 2)[:, 0, :])
+
+        topk, ind = t.topk(t.size()[2], dim=2)
+
+        #print(t[3, 15, :])
+        if self.attention_heads_inactive > 0:
+            t = t.scatter(2, ind[:, :, -self.attention_heads_inactive:], res2)  # filling inactive head positions with zeros
+        #print(t[3, 15, :])
+        c = nn.functional.softmax(t, dim=2)
+        #print(c[3, 15, :])
 
         return c.transpose(0, 2).transpose(1, 0)
 
@@ -556,8 +594,8 @@ class MultiheadAttentionComp(nn.Module):
         assert list(attn.size()) == [bsz * self.num_heads, tgt_len, self.head_dim]
 
         ############# comp
-        with open("test_from_weights.txt",'a',encoding = 'utf-8') as f:
-            #if self.attention_competition_type == "softmax":
+        with open("../code/redoing_ablation_hidden_sgn.txt",'w',encoding = 'utf-8') as f:
+            #if self.attention_competition_type == "both":
             #    f.write(f"Before: {attn[100:104, 5, :16]}\n")
 
             attn = attn.view(
@@ -567,17 +605,19 @@ class MultiheadAttentionComp(nn.Module):
             #c = self.inference_masking(query)
             if self.attention_competition_type == "softmax":
                 c = self.inference_masking_softmax(query)
+            elif self.attention_competition_type == "both":
+                c = self.inference_masking_step_softmax(query)
             else:
                 c = self.inference_masking_step(query)
             assert list(c.size()) == [bsz, self.num_heads, tgt_len]
             
-            #if self.attention_competition_type == "softmax":
-            #    print(torch.mean(c[:, :, :5], dim=0).data)
             if self.attention_competition_type == "softmax":
-                f.write(f"Multplying: {c[0, :, 4].data}\n")
+                mylen = c[0, 0, :].size()[0]
+                f.write(f"Multplying in mean: {torch.mean(c[:, :, :min(5, mylen-1)], dim=0).data}\n")
+                mybsz = c[:, 0, 0].size()[0]
+                f.write(f"Multplying in batch 25: {c[min(25, mybsz-1), :, min(5, mylen-1)].data}\n")
             #print(self.head_signatures[:, 10])
-            if self.attention_competition_type == "softmax":
-                if not self.cfg_comp.attention_using_head_weigts:
+                if not self.using_weights_for_signatures:
                     norm1 = torch.linalg.norm(self.head_signatures[0, :]).data
                     norm2 = torch.linalg.norm(self.head_signatures[1, :]).data
                     norm3 = torch.linalg.norm(self.head_signatures[2, :]).data
@@ -589,30 +629,26 @@ class MultiheadAttentionComp(nn.Module):
                     norm2 = torch.linalg.norm(signatures[1, :]).data
                     norm3 = torch.linalg.norm(signatures[2, :]).data
                     norm4 = torch.linalg.norm(signatures[3, :]).data
-                    f.write(f"Head Norms: {norm1}, {norm2}, {norm3}, {norm4}\n")
-            '''
-            if self.attention_competition_type == "softmax":
-                if not self.cfg_comp.attention_using_head_weigts:
+                    f.write(f"Head Norms: {norm1}, {norm2}, {norm3}, {norm4}\n")           
+                if not self.using_weights_for_signatures:
                     cos1 = F.cosine_similarity(self.head_signatures[0, :], self.head_signatures[1, :], dim=0)
                     cos2 = F.cosine_similarity(self.head_signatures[0, :], self.head_signatures[2, :], dim=0)
                     cos3 = F.cosine_similarity(self.head_signatures[1, :], self.head_signatures[2, :], dim=0)
-                    f.write(f"Sims: {cos1}, {cos2}, {cos3}\n")
+                    f.write(f"Sign sims: {cos1}, {cos2}, {cos3}\n")
                 else:
                     signatures = self.compute_signatures_from_weights()
                     cos1 = F.cosine_similarity(signatures[0, :], signatures[1, :], dim=0)
                     cos2 = F.cosine_similarity(signatures[0, :], signatures[2, :], dim=0)
                     cos3 = F.cosine_similarity(signatures[1, :], signatures[2, :], dim=0)
-                    f.write(f"Sims: {cos1}, {cos2}, {cos3}\n")
-            '''
-            if self.attention_competition_type == "softmax":
-                cos1 = torch.mean(F.cosine_similarity(attn[:, 0, 4, :], attn[:, 1, 4, :], dim=1)).item()
-                cos2 = torch.mean(F.cosine_similarity(attn[:, 0, 4, :], attn[:, 2, 4, :], dim=1)).item()
-                cos3 = torch.mean(F.cosine_similarity(attn[:, 0, 4, :], attn[:, 3, 4, :], dim=1)).item()
-                cos4 = torch.mean(F.cosine_similarity(attn[:, 1, 4, :], attn[:, 2, 4, :], dim=1)).item()
-                cos5 = torch.mean(F.cosine_similarity(attn[:, 1, 4, :], attn[:, 3, 4, :], dim=1)).item()
-                cos6 = torch.mean(F.cosine_similarity(attn[:, 2, 4, :], attn[:, 3, 4, :], dim=1)).item()
-                f.write(f"Sims: {cos1}, {cos2}, {cos3}, {cos4}, {cos5}, {cos6}\n")
-
+                    f.write(f"Sign sims: {cos1}, {cos2}, {cos3}\n")            
+                mylen = attn[0, 0, :, 0].size()[0]
+                cos1 = torch.mean(F.cosine_similarity(attn[:, 0, min(4, mylen-1), :], attn[:, 1, min(4, mylen-1), :], dim=1)).item()
+                cos2 = torch.mean(F.cosine_similarity(attn[:, 0, min(4, mylen-1), :], attn[:, 2, min(4, mylen-1), :], dim=1)).item()
+                cos3 = torch.mean(F.cosine_similarity(attn[:, 0, min(4, mylen-1), :], attn[:, 3, min(4, mylen-1), :], dim=1)).item()
+                cos4 = torch.mean(F.cosine_similarity(attn[:, 1, min(4, mylen-1), :], attn[:, 2, min(4, mylen-1), :], dim=1)).item()
+                cos5 = torch.mean(F.cosine_similarity(attn[:, 1, min(4, mylen-1), :], attn[:, 3, min(4, mylen-1), :], dim=1)).item()
+                cos6 = torch.mean(F.cosine_similarity(attn[:, 2, min(4, mylen-1), :], attn[:, 3, min(4, mylen-1), :], dim=1)).item()
+                f.write(f"Attn Sims: {cos1}, {cos2}, {cos3}, {cos4}, {cos5}, {cos6}\n")
 
             #attn = attn.masked_fill(
             #    c.unsqueeze(3).to(torch.bool),
@@ -624,7 +660,7 @@ class MultiheadAttentionComp(nn.Module):
                 bsz*self.num_heads, tgt_len, self.head_dim
             )
 
-            #if self.attention_competition_type == "softmax":
+            #if self.attention_competition_type == "both":
             #    f.write(f"After: {attn[100:104, 5, :16]}\n")
         #############
 
