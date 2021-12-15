@@ -36,13 +36,13 @@ class TransformerEncoderLayerCompBase(nn.Module):
         args (argparse.Namespace): parsed command-line arguments
     """
 
-    def __init__(self, cfg):
+    def __init__(self, cfg, layer):
         super().__init__()
         self.cfg = cfg
         self.embed_dim = cfg.encoder.embed_dim
         self.quant_noise = cfg.quant_noise.pq
         self.quant_noise_block_size = cfg.quant_noise.pq_block_size
-        self.self_attn = self.build_self_attention(self.embed_dim, cfg)
+        self.self_attn = self.build_self_attention(self.embed_dim, cfg, name=("encoder_self", layer))
         self.self_attn_layer_norm = LayerNorm(self.embed_dim, export=cfg.export)
         self.dropout_module = FairseqDropout(
             cfg.dropout, module_name=self.__class__.__name__
@@ -149,9 +149,10 @@ class TransformerEncoderLayerCompBase(nn.Module):
             nn.Linear(input_dim, output_dim), p=q_noise, block_size=qn_block_size
         )
 
-    def build_self_attention(self, embed_dim, cfg):
+    def build_self_attention(self, embed_dim, cfg, name):
         #######################
         return MultiheadAttentionComp(
+            name,
             cfg,
             cfg.encoder.competitive,
             embed_dim,
@@ -315,13 +316,13 @@ class TransformerEncoderLayerCompBase(nn.Module):
 
 # backward compatible with the legacy argparse format
 class TransformerEncoderLayerComp(TransformerEncoderLayerCompBase):
-    def __init__(self, args):
-        super().__init__(TransformerCompConfig.from_namespace(args))
+    def __init__(self, args, layer):
+        super().__init__(TransformerCompConfig.from_namespace(args), layer)
         self.args = args
 
-    def build_self_attention(self, embed_dim, args):
+    def build_self_attention(self, embed_dim, args, name):
         return super().build_self_attention(
-            embed_dim, TransformerCompConfig.from_namespace(args)
+            embed_dim, TransformerCompConfig.from_namespace(args), name
         )
 
 
@@ -343,7 +344,7 @@ class TransformerDecoderLayerCompBase(nn.Module):
     """
 
     def __init__(
-        self, cfg, no_encoder_attn=False, add_bias_kv=False, add_zero_attn=False
+        self, cfg, layer, no_encoder_attn=False, add_bias_kv=False, add_zero_attn=False
     ):
         super().__init__()
         self.cfg = cfg
@@ -359,6 +360,7 @@ class TransformerDecoderLayerCompBase(nn.Module):
         self.self_attn = self.build_self_attention(
             self.embed_dim,
             cfg,
+            name=("decoder_self", layer),
             add_bias_kv=add_bias_kv,
             add_zero_attn=add_zero_attn,
         )
@@ -392,7 +394,7 @@ class TransformerDecoderLayerCompBase(nn.Module):
             self.encoder_attn = None
             self.encoder_attn_layer_norm = None
         else:
-            self.encoder_attn = self.build_encoder_attention(self.embed_dim, cfg)
+            self.encoder_attn = self.build_encoder_attention(self.embed_dim, cfg, name=("encoder_decoder", layer))
             self.encoder_attn_layer_norm = LayerNorm(self.embed_dim, export=cfg.export)
 
         self.ffn_layernorm = (
@@ -502,9 +504,10 @@ class TransformerDecoderLayerCompBase(nn.Module):
 
     #######################
     def build_self_attention(
-        self, embed_dim, cfg, add_bias_kv=False, add_zero_attn=False
+        self, embed_dim, cfg, name, add_bias_kv=False, add_zero_attn=False
         ):
         return MultiheadAttentionComp(
+            name,
             cfg,
             cfg.decoder.competitive,
             embed_dim,
@@ -529,8 +532,9 @@ class TransformerDecoderLayerCompBase(nn.Module):
         )
         '''
 
-    def build_encoder_attention(self, embed_dim, cfg):
+    def build_encoder_attention(self, embed_dim, cfg, name):
         return MultiheadAttentionComp(
+            name,
             cfg,
             cfg.decoder.competitivecrossattn,
             embed_dim,
@@ -782,10 +786,11 @@ class TransformerDecoderLayerCompBase(nn.Module):
 # backward compatible with the legacy argparse format
 class TransformerDecoderLayerComp(TransformerDecoderLayerCompBase):
     def __init__(
-        self, args, no_encoder_attn=False, add_bias_kv=False, add_zero_attn=False
+        self, args, layer, no_encoder_attn=False, add_bias_kv=False, add_zero_attn=False
     ):
         super().__init__(
             TransformerCompConfig.from_namespace(args),
+            layer,
             no_encoder_attn=no_encoder_attn,
             add_bias_kv=add_bias_kv,
             add_zero_attn=add_zero_attn,
@@ -793,17 +798,19 @@ class TransformerDecoderLayerComp(TransformerDecoderLayerCompBase):
         self.args = args
 
     def build_self_attention(
-        self, embed_dim, args, add_bias_kv=False, add_zero_attn=False
+        self, embed_dim, args, name, add_bias_kv=False, add_zero_attn=False
     ):
         return super().build_self_attention(
             embed_dim,
             TransformerCompConfig.from_namespace(args),
+            name,
             add_bias_kv=add_bias_kv,
             add_zero_attn=add_zero_attn,
         )
 
-    def build_encoder_attention(self, embed_dim, args):
+    def build_encoder_attention(self, embed_dim, args, name):
         return super().build_encoder_attention(
             embed_dim,
             TransformerCompConfig.from_namespace(args),
+            name
         )

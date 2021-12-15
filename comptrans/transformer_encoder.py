@@ -94,7 +94,7 @@ class TransformerEncoderCompBase(FairseqEncoder):
         else:
             self.layers = nn.ModuleList([])
         self.layers.extend(
-            [self.build_encoder_layer(cfg) for i in range(cfg.encoder.layers)]
+            [self.build_encoder_layer(cfg, str(i)) for i in range(cfg.encoder.layers)]
         )
         self.num_layers = len(self.layers)
 
@@ -103,8 +103,8 @@ class TransformerEncoderCompBase(FairseqEncoder):
         else:
             self.layer_norm = None
 
-    def build_encoder_layer(self, cfg):
-        layer = comptransformer_layer.TransformerEncoderLayerCompBase(cfg)
+    def build_encoder_layer(self, cfg, layer):
+        layer = comptransformer_layer.TransformerEncoderLayerCompBase(cfg, layer)
         checkpoint = cfg.checkpoint_activations
         if checkpoint:
             offload_to_cpu = cfg.offload_activations
