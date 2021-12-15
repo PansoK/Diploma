@@ -17,7 +17,6 @@ from torch.nn import Parameter
 
 from torch.autograd import Variable
 
-
 @with_incremental_state
 class MultiheadAttentionComp(nn.Module):
     """Multi-headed attention.
@@ -27,6 +26,7 @@ class MultiheadAttentionComp(nn.Module):
 
     def __init__(
         self,
+        name,
         cfg,
         cfg_comp,
         embed_dim,
@@ -44,6 +44,7 @@ class MultiheadAttentionComp(nn.Module):
     ):
         super().__init__()
         self.embed_dim = embed_dim
+        self.name = name
         self.cfg_comp = cfg_comp
         self.kdim = kdim if kdim is not None else embed_dim
         self.vdim = vdim if vdim is not None else embed_dim
@@ -92,9 +93,12 @@ class MultiheadAttentionComp(nn.Module):
         #################
         # competitive format
 
-        assert (cfg_comp.attention_competition_type == "softmax" or cfg_comp.attention_competition_type == "step" or cfg_comp.attention_competition_type == "both")
+        assert (cfg_comp.attention_competition_type == "softmax" or \
+            cfg_comp.attention_competition_type == "step" or \
+            cfg_comp.attention_competition_type == "both" or \
+            cfg_comp.attention_competition_type == "neural_int")
         self.attention_competition_type = cfg_comp.attention_competition_type
-        if self.attention_competition_type == "step" or cfg_comp.attention_competition_type == "both":
+        if not self.attention_competition_type == "softmax":
             self.attention_heads_inactive = self.cfg_comp.attention_heads_inactive
             assert self.attention_heads_inactive < self.num_heads
 
@@ -150,6 +154,9 @@ class MultiheadAttentionComp(nn.Module):
                 self.quant_noise_block_size,
             )
             '''
+        if self.attention_competition_type == "neural_int":
+            self.sigma = Parameter(torch.Tensor(1))
+
         #################
 
         self.reset_parameters(cfg)
@@ -183,6 +190,8 @@ class MultiheadAttentionComp(nn.Module):
 
         if not self.using_weights_for_signatures:
             nn.init.xavier_normal_(self.head_signatures)
+        if self.attention_competition_type == "neural_int":
+            torch.nn.init.normal_(self.sigma, mean=1.0, std=0.05)
 
         nn.init.xavier_uniform_(self.out_proj.weight)
         if self.out_proj.bias is not None:
@@ -271,6 +280,7 @@ class MultiheadAttentionComp(nn.Module):
         #print(t[3, 15, :])
         c = t.scatter(2, ind[:, :, :-self.attention_heads_inactive], res1)  # filling active head positions with ones
         #print(c[3, 15, :])
+        #c = t.scatter(2, ind, res1)
 
         return c.transpose(0, 2).transpose(1, 0)
 
@@ -326,10 +336,48 @@ class MultiheadAttentionComp(nn.Module):
 
         #print(t[3, 15, :])
         if self.attention_heads_inactive > 0:
-            t = t.scatter(2, ind[:, :, -self.attention_heads_inactive:], res2)  # filling inactive head positions with zeros
+            t = t.scatter(2, ind[:, :, -self.attention_heads_inactive:], res2)  # filling inactive head positions with -infs
         #print(t[3, 15, :])
         c = nn.functional.softmax(t, dim=2)
         #print(c[3, 15, :])
+
+        return c.transpose(0, 2).transpose(1, 0)
+
+    def inference_masking_step_softmax_neur_inters(self, x):
+        """
+        Args:
+            x (Tensor): input to the ffns `(seq_len, batch, embed_dim)`
+
+        Returns:
+            attention heads mask equal to 0 at heads that will be droppe and softmax weights for the rest of the heads per position,
+            of shape '(batch, number_of_heads, seq_len)'
+        """
+
+        t_size = (x.size(0), x.size(1), self.num_heads)
+        res2 = Variable(torch.ones(t_size, device=x.get_device()))*(-10**9)  # requires_grad=False maybe
+
+        t = self.activation_fn(self.inf_fc1(x))
+        t = self.inference_activation_dropout_module(t)
+        t = self.inf_fc2(t)
+
+        if self.using_weights_for_signatures:
+            head_signatures = self.compute_signatures_from_weights()
+            t = torch.matmul(t, head_signatures.transpose(0, 1))  # of (seq_len, batch, n_of_heads)
+        else:
+            t = torch.matmul(t, self.head_signatures.transpose(0, 1))  # of (seq_len, batch, n_of_heads)
+        #print(t.transpose(0, 2)[:, 0, :])
+
+        t = 1-t
+
+        topk, ind = t.topk(t.size()[2], dim=2)
+
+        #print(t[3, 15, :])
+        if self.attention_heads_inactive > 0:
+            t = t.scatter(2, ind[:, :, -self.attention_heads_inactive:], -res2)  # filling inactive head positions with -infs
+        #print(t[3, 15, :])
+        c = nn.functional.softmax(-t/self.sigma, dim=2)
+        #print(c[3, 15, :])
+        #print(self.sigma)
 
         return c.transpose(0, 2).transpose(1, 0)
 
@@ -594,74 +642,75 @@ class MultiheadAttentionComp(nn.Module):
         assert list(attn.size()) == [bsz * self.num_heads, tgt_len, self.head_dim]
 
         ############# comp
-        with open("../code/redoing_ablation_hidden_sgn.txt",'w',encoding = 'utf-8') as f:
-            #if self.attention_competition_type == "both":
-            #    f.write(f"Before: {attn[100:104, 5, :16]}\n")
+        check_for_type = "softmax"
+        # dictionary to store info
+        if self.attention_competition_type == check_for_type:
+            data_dict = {"name": self.name}
+        if self.attention_competition_type == check_for_type:
+            mylen = attn[0, :, 0].size()[0]
+            mybsz = attn[:, 0, 0].size()[0]
+            data_dict["Before"] = attn[min(100, mybsz-5):min(104, mybsz-1), min(5, mylen-1), :16].tolist()
 
-            attn = attn.view(
-                bsz, self.num_heads, tgt_len, self.head_dim
-            )
+        attn = attn.view(
+            bsz, self.num_heads, tgt_len, self.head_dim
+        )
 
-            #c = self.inference_masking(query)
-            if self.attention_competition_type == "softmax":
-                c = self.inference_masking_softmax(query)
-            elif self.attention_competition_type == "both":
-                c = self.inference_masking_step_softmax(query)
+        #c = self.inference_masking(query)
+        if self.attention_competition_type == "step":
+            c = self.inference_masking_step(query)
+        elif self.attention_competition_type == "softmax":
+            c = self.inference_masking_softmax(query)
+        elif self.attention_competition_type == "both":
+            c = self.inference_masking_step_softmax(query)
+        elif self.attention_competition_type == "neural_int":
+            c = self.inference_masking_step_softmax_neur_inters(query)
+        assert list(c.size()) == [bsz, self.num_heads, tgt_len]
+        
+        
+        if self.attention_competition_type == check_for_type:
+            mylen = c[0, 0, :].size()[0]
+            data_dict["Multplying in Mean (Pos: 1-5)"] = torch.mean(c[:, :, :min(5, mylen-1)], dim=0).data.tolist()
+            mybsz = c[:, 0, 0].size()[0]
+            data_dict["Multplying in Batch 25 (Pos: 5)"] = c[min(25, mybsz-1), :, min(5, mylen-1)].data.tolist()
+        #print(self.head_signatures[:, 10])
+            if not self.using_weights_for_signatures:
+                norms = [torch.linalg.norm(self.head_signatures[i, :]).item() for i in range(self.num_heads)]
             else:
-                c = self.inference_masking_step(query)
-            assert list(c.size()) == [bsz, self.num_heads, tgt_len]
-            
-            if self.attention_competition_type == "softmax":
-                mylen = c[0, 0, :].size()[0]
-                f.write(f"Multplying in mean: {torch.mean(c[:, :, :min(5, mylen-1)], dim=0).data}\n")
-                mybsz = c[:, 0, 0].size()[0]
-                f.write(f"Multplying in batch 25: {c[min(25, mybsz-1), :, min(5, mylen-1)].data}\n")
-            #print(self.head_signatures[:, 10])
-                if not self.using_weights_for_signatures:
-                    norm1 = torch.linalg.norm(self.head_signatures[0, :]).data
-                    norm2 = torch.linalg.norm(self.head_signatures[1, :]).data
-                    norm3 = torch.linalg.norm(self.head_signatures[2, :]).data
-                    norm4 = torch.linalg.norm(self.head_signatures[3, :]).data
-                    f.write(f"Head Norms: {norm1}, {norm2}, {norm3}, {norm4}\n")
-                else:
-                    signatures = self.compute_signatures_from_weights()
-                    norm1 = torch.linalg.norm(signatures[0, :]).data
-                    norm2 = torch.linalg.norm(signatures[1, :]).data
-                    norm3 = torch.linalg.norm(signatures[2, :]).data
-                    norm4 = torch.linalg.norm(signatures[3, :]).data
-                    f.write(f"Head Norms: {norm1}, {norm2}, {norm3}, {norm4}\n")           
-                if not self.using_weights_for_signatures:
-                    cos1 = F.cosine_similarity(self.head_signatures[0, :], self.head_signatures[1, :], dim=0)
-                    cos2 = F.cosine_similarity(self.head_signatures[0, :], self.head_signatures[2, :], dim=0)
-                    cos3 = F.cosine_similarity(self.head_signatures[1, :], self.head_signatures[2, :], dim=0)
-                    f.write(f"Sign sims: {cos1}, {cos2}, {cos3}\n")
-                else:
-                    signatures = self.compute_signatures_from_weights()
-                    cos1 = F.cosine_similarity(signatures[0, :], signatures[1, :], dim=0)
-                    cos2 = F.cosine_similarity(signatures[0, :], signatures[2, :], dim=0)
-                    cos3 = F.cosine_similarity(signatures[1, :], signatures[2, :], dim=0)
-                    f.write(f"Sign sims: {cos1}, {cos2}, {cos3}\n")            
-                mylen = attn[0, 0, :, 0].size()[0]
-                cos1 = torch.mean(F.cosine_similarity(attn[:, 0, min(4, mylen-1), :], attn[:, 1, min(4, mylen-1), :], dim=1)).item()
-                cos2 = torch.mean(F.cosine_similarity(attn[:, 0, min(4, mylen-1), :], attn[:, 2, min(4, mylen-1), :], dim=1)).item()
-                cos3 = torch.mean(F.cosine_similarity(attn[:, 0, min(4, mylen-1), :], attn[:, 3, min(4, mylen-1), :], dim=1)).item()
-                cos4 = torch.mean(F.cosine_similarity(attn[:, 1, min(4, mylen-1), :], attn[:, 2, min(4, mylen-1), :], dim=1)).item()
-                cos5 = torch.mean(F.cosine_similarity(attn[:, 1, min(4, mylen-1), :], attn[:, 3, min(4, mylen-1), :], dim=1)).item()
-                cos6 = torch.mean(F.cosine_similarity(attn[:, 2, min(4, mylen-1), :], attn[:, 3, min(4, mylen-1), :], dim=1)).item()
-                f.write(f"Attn Sims: {cos1}, {cos2}, {cos3}, {cos4}, {cos5}, {cos6}\n")
+                signatures = self.compute_signatures_from_weights()
+                norms = [torch.linalg.norm(signatures[i, :]).item() for i in range(self.num_heads)]
+            data_dict["Sign Norms"] = norms
+            if not self.using_weights_for_signatures:
+                combos = [(i, j) for i in range(self.num_heads-1) for j in range(i+1, self.num_heads)]
+                sign_sims = [F.cosine_similarity(self.head_signatures[i, :], self.head_signatures[j, :], dim=0).item() for (i, j) in combos]
+            else:
+                signatures = self.compute_signatures_from_weights()
+                combos = [(i, j) for i in range(self.num_heads-1) for j in range(i+1, self.num_heads)]
+                sign_sims = [F.cosine_similarity(signatures[i, :], signatures[j, :], dim=0).item() for (i, j) in combos]
+            data_dict["Sign Sims"] = sign_sims
+            mylen = attn[0, 0, :, 0].size()[0]
+            attn_sims = [torch.mean(F.cosine_similarity(attn[:, i, min(4, mylen-1), :], attn[:, j, min(4, mylen-1), :], dim=1)).item() \
+                for (i, j) in combos]
+            data_dict["Attn Sims (pos 4)"] = attn_sims
+        
 
-            #attn = attn.masked_fill(
-            #    c.unsqueeze(3).to(torch.bool),
-            #    1,  # changed it to one, so that even if this is used we do not have to change anything else
-            #)
-            attn = torch.mul(attn, c.unsqueeze(3))  # applying masking
+        #attn = attn.masked_fill(
+        #    c.unsqueeze(3).to(torch.bool),
+        #    1,  # changed it to one, so that even if this is used we do not have to change anything else
+        #)
+        attn = torch.mul(attn, c.unsqueeze(3))  # applying masking
 
-            attn = attn.view(
-                bsz*self.num_heads, tgt_len, self.head_dim
-            )
+        attn = attn.view(
+            bsz*self.num_heads, tgt_len, self.head_dim
+        )
 
-            #if self.attention_competition_type == "both":
-            #    f.write(f"After: {attn[100:104, 5, :16]}\n")
+        if self.attention_competition_type == check_for_type:
+            mylen = attn[0, :, 0].size()[0]
+            mybsz = attn[:, 0, 0].size()[0]
+            data_dict["After"] = attn[min(100, mybsz-5):min(104, mybsz-1), min(5, mylen-1), :16].tolist()
+
+        if self.attention_competition_type == check_for_type:
+            with open("../code/train_1_1_4so_4wt_4wt.txt",'a', encoding = 'utf-8') as f:
+                f.write(str(data_dict) + "\n")
         #############
 
         if self.onnx_trace and attn.size(1) == 1:
