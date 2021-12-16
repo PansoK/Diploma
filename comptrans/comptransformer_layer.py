@@ -19,6 +19,7 @@ from torch import Tensor
 #)
 from comptransformer_config import TransformerCompConfig
 from compmultihead_attention import MultiheadAttentionComp
+import datetime
 
 
 class TransformerEncoderLayerCompBase(nn.Module):
@@ -39,6 +40,7 @@ class TransformerEncoderLayerCompBase(nn.Module):
     def __init__(self, cfg, layer):
         super().__init__()
         self.cfg = cfg
+        self.layer = layer
         self.embed_dim = cfg.encoder.embed_dim
         self.quant_noise = cfg.quant_noise.pq
         self.quant_noise_block_size = cfg.quant_noise.pq_block_size
@@ -305,6 +307,14 @@ class TransformerEncoderLayerCompBase(nn.Module):
         x = self.activation_fn(self.fc1(x))
         x = self.activation_dropout_module(x)
         x = self.fc2(x)
+        '''
+        with open("/home/panso014/diploma/code/train_1_1_4so_4wt_4wt_it_to_print.txt",'a', encoding = 'utf-8') as f:
+            data_dict = {"name": ("encoder", self.layer)}
+            now = datetime.datetime.now()
+            data_dict["time"] = now.strftime("%Y-%m-%d %H:%M:%S")
+            data_dict["fc1"] = [torch.linalg.norm(self.fc1.weight).item(), torch.linalg.norm(self.fc1.bias).item()]
+            f.write(str(data_dict) + "\n")
+        '''
         #######################
 
         x = self.dropout_module(x)

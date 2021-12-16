@@ -17,6 +17,10 @@ from torch.nn import Parameter
 
 from torch.autograd import Variable
 
+import logging
+import datetime
+logger = logging.getLogger("fairseq.modules.multihead_atttention")
+
 @with_incremental_state
 class MultiheadAttentionComp(nn.Module):
     """Multi-headed attention.
@@ -642,11 +646,15 @@ class MultiheadAttentionComp(nn.Module):
         assert list(attn.size()) == [bsz * self.num_heads, tgt_len, self.head_dim]
 
         ############# comp
+        toprint = False
         check_for_type = "softmax"
+        file = "/home/panso014/diploma/code/train_1_1_4so_4wt_4wt_it_to_print.txt"
         # dictionary to store info
-        if self.attention_competition_type == check_for_type:
+        if toprint and self.attention_competition_type == check_for_type:
             data_dict = {"name": self.name}
-        if self.attention_competition_type == check_for_type:
+            now = datetime.datetime.now()
+            data_dict["time"] = now.strftime("%Y-%m-%d %H:%M:%S")
+        if toprint and self.attention_competition_type == check_for_type:
             mylen = attn[0, :, 0].size()[0]
             mybsz = attn[:, 0, 0].size()[0]
             data_dict["Before"] = attn[min(100, mybsz-5):min(104, mybsz-1), min(5, mylen-1), :16].tolist()
@@ -667,7 +675,7 @@ class MultiheadAttentionComp(nn.Module):
         assert list(c.size()) == [bsz, self.num_heads, tgt_len]
         
         
-        if self.attention_competition_type == check_for_type:
+        if toprint and self.attention_competition_type == check_for_type:
             mylen = c[0, 0, :].size()[0]
             data_dict["Multplying in Mean (Pos: 1-5)"] = torch.mean(c[:, :, :min(5, mylen-1)], dim=0).data.tolist()
             mybsz = c[:, 0, 0].size()[0]
@@ -691,6 +699,11 @@ class MultiheadAttentionComp(nn.Module):
             attn_sims = [torch.mean(F.cosine_similarity(attn[:, i, min(4, mylen-1), :], attn[:, j, min(4, mylen-1), :], dim=1)).item() \
                 for (i, j) in combos]
             data_dict["Attn Sims (pos 4)"] = attn_sims
+
+            data_dict["q_proj"] = [torch.linalg.norm(self.q_proj.weight).item(), torch.linalg.norm(self.q_proj.bias).item()]
+            data_dict["k_proj"] = [torch.linalg.norm(self.k_proj.weight).item(), torch.linalg.norm(self.k_proj.bias).item()]
+            data_dict["inf_fc1"] = [torch.linalg.norm(self.inf_fc1.weight).item(), torch.linalg.norm(self.inf_fc1.bias).item()]
+            data_dict["inf_fc2"] = [torch.linalg.norm(self.inf_fc2.weight).item(), torch.linalg.norm(self.inf_fc2.bias).item()]
         
 
         #attn = attn.masked_fill(
@@ -703,13 +716,13 @@ class MultiheadAttentionComp(nn.Module):
             bsz*self.num_heads, tgt_len, self.head_dim
         )
 
-        if self.attention_competition_type == check_for_type:
+        if toprint and self.attention_competition_type == check_for_type:
             mylen = attn[0, :, 0].size()[0]
             mybsz = attn[:, 0, 0].size()[0]
             data_dict["After"] = attn[min(100, mybsz-5):min(104, mybsz-1), min(5, mylen-1), :16].tolist()
 
-        if self.attention_competition_type == check_for_type:
-            with open("../code/train_1_1_4so_4wt_4wt.txt",'a', encoding = 'utf-8') as f:
+        if toprint and self.attention_competition_type == check_for_type:
+            with open(file,'a', encoding = 'utf-8') as f:
                 f.write(str(data_dict) + "\n")
         #############
 

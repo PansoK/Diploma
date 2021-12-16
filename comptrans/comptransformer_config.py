@@ -153,6 +153,22 @@ class TransformerCompConfig(FairseqDataclass):
         metadata={"help": "Maximum input length supported by the encoder"},
     )
     decoder: DecoderCompConfig = DecoderCompConfig()
+    parallel_ffns_inference_training_type: str = field(
+        default="together",
+        metadata={"help": "How to train the inference part of the parallel ffns. Choose from 'together', 'sequentially', 'iteratively'"}
+    )
+    parallel_ffns_inference_training_type_sequential: float = field(
+        default=0.0,
+        metadata={"help": "Percentage of epochs used for inference mechanism at the end"}
+    )
+    attention_heads_inference_training_type: str = field(
+        default="together",
+        metadata={"help": "How to train the inference part of the competitive attn heads. Choose from 'together', 'sequentially', 'iteratively'"}
+    )
+    attention_heads_inference_training_type_sequential: float = field(
+        default=0.0,
+        metadata={"help": "Percentage of epochs used for inference mechanism at the end"}
+    )
     # TODO should really be in the decoder config
     max_target_positions: int = field(
         default=DEFAULT_MAX_TARGET_POSITIONS,
