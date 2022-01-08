@@ -48,26 +48,46 @@ def main(cfg: FairseqConfig) -> None:
     ##########################
     # if they are together then we should use the big dataset
     if cfg.model.parallel_ffns_inference_training_type == "together" and cfg.model.attention_heads_inference_training_type == "together":
-        #datasets = cfg.model.data.split(os.pathsep)
-        cfg.model.data = "/home/panso014/diploma/code/tasks/fairseq-data-bin/iwslt14.tokenized.de-en"
-        cfg.task.data = "/home/panso014/diploma/code/tasks/fairseq-data-bin/iwslt14.tokenized.de-en"
+        datasets = cfg.task.data.split(os.pathsep)
+        if len(datasets) == 1:
+            pass
+        else:
+            # use complete dataset
+            cfg.task.data = datasets[0][:-2]
+            try:
+                cfg.model.data = cfg.task.data
+            except:
+                pass
+    if cfg.model.parallel_ffns_inference_training_type == "iteratively" or cfg.model.attention_heads_inference_training_type == "iteratively":
+        datasets = cfg.task.data.split(os.pathsep)
+        cfg.task.data = datasets[0] + ":" + (datasets[1] + ":")*2 + datasets[1]
+        try:
+            cfg.model.data = cfg.task.data
+        except:
+            pass
     # in the following cases we need to create a different set of data files. If both are done sequentially we will use the parallel_ffns number of epochs
     if cfg.model.parallel_ffns_inference_training_type == "sequentially" \
         and 1 > cfg.model.parallel_ffns_inference_training_type_sequential > 0 \
-        and os.pathsep in cfg.model.data:  # meaning that we hae more than one datasets
-        datasets = cfg.model.data.split(os.pathsep)
+        and os.pathsep in cfg.task.data:  # meaning that we hae more than one datasets
+        datasets = cfg.task.data.split(os.pathsep)
         inference_training_epochs = int(cfg.optimization.max_epoch*cfg.model.parallel_ffns_inference_training_type_sequential)
         model_training_epochs = cfg.optimization.max_epoch - inference_training_epochs
-        cfg.model.data = (datasets[0] + ":")*model_training_epochs + (datasets[1] + ":")*(inference_training_epochs-1) + datasets[1]
-        cfg.task.data = cfg.model.data
+        cfg.task.data = (datasets[0] + ":")*model_training_epochs + (datasets[1] + ":")*(inference_training_epochs-1) + datasets[1]
+        try:
+            cfg.model.data = cfg.task.data
+        except:
+            pass
     elif cfg.model.attention_heads_inference_training_type == "sequentially" \
         and 1 > cfg.model.attention_heads_inference_training_type_sequential > 0 \
-        and os.pathsep in cfg.model.data:  # meaning that we hae more than one datasets
-        datasets = cfg.model.data.split(os.pathsep)
+        and os.pathsep in cfg.task.data:  # meaning that we hae more than one datasets
+        datasets = cfg.task.data.split(os.pathsep)
         inference_training_epochs = int(cfg.optimization.max_epoch*cfg.model.attention_heads_inference_training_type_sequential)
         model_training_epochs = cfg.optimization.max_epoch - inference_training_epochs
-        cfg.model.data = (datasets[0] + ":")*model_training_epochs + (datasets[1] + ":")*(inference_training_epochs-1) + datasets[1]
-        cfg.task.data = cfg.model.data
+        cfg.task.data = (datasets[0] + ":")*model_training_epochs + (datasets[1] + ":")*(inference_training_epochs-1) + datasets[1]
+        try:
+            cfg.model.data = cfg.task.data
+        except:
+            pass
     ##########################
 
     if isinstance(cfg, argparse.Namespace):
@@ -544,51 +564,80 @@ def get_valid_stats(
 
 
 def set_ffn_inf_grad(cfg: FairseqConfig, model, value):
-    for layer in range(cfg.model.encoder_layers):
-        model.encoder.layers[layer].inf_fc1.weight.requires_grad = value
-        model.encoder.layers[layer].inf_fc1.bias.requires_grad = value
-        model.encoder.layers[layer].inf_fc2.weight.requires_grad = value
-        model.encoder.layers[layer].inf_fc2.bias.requires_grad = value
-        model.encoder.layers[layer].ffn_signatures.requires_grad = value
-    for layer in range(cfg.model.decoder_layers):
-        model.decoder.layers[layer].inf_fc1.weight.requires_grad = value
-        model.decoder.layers[layer].inf_fc1.bias.requires_grad = value
-        model.decoder.layers[layer].inf_fc2.weight.requires_grad = value
-        model.decoder.layers[layer].inf_fc2.bias.requires_grad = value
-        model.decoder.layers[layer].ffn_signatures.requires_grad = value
+    if cfg.model._name.startswith('robertacomp'):
+        # encoder self
+        for layer in range(cfg.model.encoder_layers):
+            model.encoder.sentence_encoder.layers[layer].inf_fc1.weight.requires_grad = value
+            model.encoder.sentence_encoder.layers[layer].inf_fc1.bias.requires_grad = value
+            model.encoder.sentence_encoder.layers[layer].inf_fc2.weight.requires_grad = value
+            model.encoder.sentence_encoder.layers[layer].inf_fc2.bias.requires_grad = value
+            model.encoder.sentence_encoder.layers[layer].ffn_signatures.requires_grad = value
+    elif cfg.model._name.startswith('comptransformer'):
+        # encoder self
+        for layer in range(cfg.model.encoder_layers):
+            model.encoder.layers[layer].inf_fc1.weight.requires_grad = value
+            model.encoder.layers[layer].inf_fc1.bias.requires_grad = value
+            model.encoder.layers[layer].inf_fc2.weight.requires_grad = value
+            model.encoder.layers[layer].inf_fc2.bias.requires_grad = value
+            model.encoder.layers[layer].ffn_signatures.requires_grad = value
+        # decoder self
+        for layer in range(cfg.model.decoder_layers):
+            model.decoder.layers[layer].inf_fc1.weight.requires_grad = value
+            model.decoder.layers[layer].inf_fc1.bias.requires_grad = value
+            model.decoder.layers[layer].inf_fc2.weight.requires_grad = value
+            model.decoder.layers[layer].inf_fc2.bias.requires_grad = value
+            model.decoder.layers[layer].ffn_signatures.requires_grad = value
+    else:
+        raise Exception("Model not valid")
 
 def set_head_inf_grad(cfg: FairseqConfig, model, value):
-    for layer in range(cfg.model.encoder_layers):
-        model.encoder.layers[layer].self_attn.inf_fc1.weight.requires_grad = value
-        model.encoder.layers[layer].self_attn.inf_fc1.bias.requires_grad = value
-        model.encoder.layers[layer].self_attn.inf_fc2.weight.requires_grad = value
-        model.encoder.layers[layer].self_attn.inf_fc2.bias.requires_grad = value
-        if cfg.model.encoder_competitive_attention_using_head_weigts:
-            model.encoder.layers[layer].self_attn.inf_sign_fc1.requires_grad = value
-            model.encoder.layers[layer].self_attn.inf_sign_fc2.requires_grad = value
-        else:
-            model.encoder.layers[layer].self_attn.head_signatures.requires_grad = value
-    for layer in range(cfg.model.decoder_layers):
-        # decoder self
-        model.decoder.layers[layer].self_attn.inf_fc1.weight.requires_grad = value
-        model.decoder.layers[layer].self_attn.inf_fc1.bias.requires_grad = value
-        model.decoder.layers[layer].self_attn.inf_fc2.weight.requires_grad = value
-        model.decoder.layers[layer].self_attn.inf_fc2.bias.requires_grad = value
-        if cfg.model.decoder_competitive_attention_using_head_weigts:
-            model.decoder.layers[layer].self_attn.inf_sign_fc1.requires_grad = value
-            model.decoder.layers[layer].self_attn.inf_sign_fc2.requires_grad = value
-        else:
-            model.decoder.layers[layer].self_attn.head_signatures.requires_grad = value
-        # encoder-decoder
-        model.decoder.layers[layer].encoder_attn.inf_fc1.weight.requires_grad = value
-        model.decoder.layers[layer].encoder_attn.inf_fc1.bias.requires_grad = value
-        model.decoder.layers[layer].encoder_attn.inf_fc2.weight.requires_grad = value
-        model.decoder.layers[layer].encoder_attn.inf_fc2.bias.requires_grad = value
-        if cfg.model.decoder_competitivecrossattn_attention_using_head_weigts:
-            model.decoder.layers[layer].encoder_attn.inf_sign_fc1.requires_grad = value
-            model.decoder.layers[layer].encoder_attn.inf_sign_fc2.requires_grad = value
-        else:
-            model.decoder.layers[layer].encoder_attn.head_signatures.requires_grad = value
+    if cfg.model._name.startswith('robertacomp'):
+        # encoder self
+        for layer in range(cfg.model.encoder_layers):
+            model.encoder.sentence_encoder.layers[layer].self_attn.inf_fc1.weight.requires_grad = value
+            model.encoder.sentence_encoder.layers[layer].self_attn.inf_fc1.bias.requires_grad = value
+            model.encoder.sentence_encoder.layers[layer].self_attn.inf_fc2.weight.requires_grad = value
+            model.encoder.sentence_encoder.layers[layer].self_attn.inf_fc2.bias.requires_grad = value
+            if cfg.model.encoder_competitive_attention_using_head_weigts:
+                model.encoder.sentence_encoder.layers[layer].self_attn.inf_sign_fc1.requires_grad = value
+                model.encoder.sentence_encoder.layers[layer].self_attn.inf_sign_fc2.requires_grad = value
+            else:
+                model.encoder.sentence_encoder.layers[layer].self_attn.head_signatures.requires_grad = value
+    elif cfg.model._name.startswith('comptransformer'):
+        # encoder self
+        for layer in range(cfg.model.encoder_layers):
+            model.encoder.layers[layer].self_attn.inf_fc1.weight.requires_grad = value
+            model.encoder.layers[layer].self_attn.inf_fc1.bias.requires_grad = value
+            model.encoder.layers[layer].self_attn.inf_fc2.weight.requires_grad = value
+            model.encoder.layers[layer].self_attn.inf_fc2.bias.requires_grad = value
+            if cfg.model.encoder_competitive_attention_using_head_weigts:
+                model.encoder.layers[layer].self_attn.inf_sign_fc1.requires_grad = value
+                model.encoder.layers[layer].self_attn.inf_sign_fc2.requires_grad = value
+            else:
+                model.encoder.layers[layer].self_attn.head_signatures.requires_grad = value
+        for layer in range(cfg.model.decoder_layers):
+            # decoder self
+            model.decoder.layers[layer].self_attn.inf_fc1.weight.requires_grad = value
+            model.decoder.layers[layer].self_attn.inf_fc1.bias.requires_grad = value
+            model.decoder.layers[layer].self_attn.inf_fc2.weight.requires_grad = value
+            model.decoder.layers[layer].self_attn.inf_fc2.bias.requires_grad = value
+            if cfg.model.decoder_competitive_attention_using_head_weigts:
+                model.decoder.layers[layer].self_attn.inf_sign_fc1.requires_grad = value
+                model.decoder.layers[layer].self_attn.inf_sign_fc2.requires_grad = value
+            else:
+                model.decoder.layers[layer].self_attn.head_signatures.requires_grad = value
+            # encoder-decoder
+            model.decoder.layers[layer].encoder_attn.inf_fc1.weight.requires_grad = value
+            model.decoder.layers[layer].encoder_attn.inf_fc1.bias.requires_grad = value
+            model.decoder.layers[layer].encoder_attn.inf_fc2.weight.requires_grad = value
+            model.decoder.layers[layer].encoder_attn.inf_fc2.bias.requires_grad = value
+            if cfg.model.decoder_competitivecrossattn_attention_using_head_weigts:
+                model.decoder.layers[layer].encoder_attn.inf_sign_fc1.requires_grad = value
+                model.decoder.layers[layer].encoder_attn.inf_sign_fc2.requires_grad = value
+            else:
+                model.decoder.layers[layer].encoder_attn.head_signatures.requires_grad = value
+    else:
+        raise Exception("Model not valid")
 
 def cli_main(
     modify_parser: Optional[Callable[[argparse.ArgumentParser], None]] = None

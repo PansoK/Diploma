@@ -1,0 +1,50 @@
+# @package _group_
+common:
+  fp16: false
+  log_format: json
+  log_interval: 200
+  user_dir: /home/panso014/diploma/code/fairseq_register_models
+
+checkpoint:
+  #no_epoch_checkpoints: true
+  no_save: false
+  save_dir: /home/panso014/diploma/code/tasks/language_modeling/fairseq/roberta/checkpoints_small_st_5_mil_iter
+
+task:
+  _name: masked_lm
+  data: ???
+  sample_break_mode: complete
+  tokens_per_sample: 512
+
+criterion: masked_lm
+
+dataset:
+  batch_size: 8
+  ignore_unused_valid_subsets: true
+
+optimizer:
+  _name: adam
+  weight_decay: 0.01
+  adam_betas: (0.9,0.98)
+  adam_eps: 1e-06
+
+lr_scheduler:
+  _name: polynomial_decay
+  warmup_updates: 10000
+
+optimization:
+  clip_norm: 0
+  lr: [0.0005]
+  max_update: 125000
+  update_freq: [32]
+
+model:
+  _name: robertacomp_small_test
+  max_positions: 512
+  dropout: 0.1
+  attention_dropout: 0.1
+  encoder_competitive_attention_competition_type: softmax
+  attention_heads_inference_training_type: iteratively
+  parallel_ffns_inference_training_type: together
+  log_format: json
+  

@@ -324,14 +324,14 @@ def main(args):
                     lines = f_train.readlines()
                 lines_big = [lines[i] for i in indices_big]
                 lines_small = [lines[i] for i in indices_small]
-                path_big = "{}{}".format(args.trainpref, ("1." + lang))
+                path_big = "{}{}".format(args.trainpref, ("1." + lang) if lang else "1") 
                 if os.path.exists(path_big):
                     logger.info("found big training file {}, deleting it".format(path_big[-9:]))
                     os.remove(path_big)
                 with open(path_big, 'a') as f_big:
                     for line in lines_big:
                         f_big.write(line)
-                path_small = "{}{}".format(args.trainpref, ("2." + lang))
+                path_small = "{}{}".format(args.trainpref, ("2." + lang) if lang else "2")
                 if os.path.exists(path_small):
                     logger.info("found small training file {}, deleting it".format(path_small[-9:]))
                     os.remove(path_small)
