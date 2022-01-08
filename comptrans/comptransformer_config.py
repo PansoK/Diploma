@@ -34,7 +34,7 @@ class CompetitiveConfig(FairseqDataclass):
         },
     )
     attention_competition_type: str = field(default="step", metadata={"help": "competition type between heads, alternative: softmax"})
-    attention_heads_inactive: int = field(default=0, metadata={"help": "number of heads that remain active"})
+    attention_heads_inactive: int = field(default=0, metadata={"help": "number of heads that remain inactive"})
     attention_heads_signature_dim: int = field(default=24, metadata={"help": "dimension of inference space for attention heads"})
     attention_heads_inference_mlp_hidden: int = field(default=128, metadata={"help": "hidden dimension of mlp that will produce inference vectors"})
     attention_using_head_weigts: bool = field(default=False, metadata={"help": "using head weights to infer signatures"})
@@ -49,7 +49,7 @@ class CompetitiveConfig(FairseqDataclass):
 @dataclass
 class CompetitiveCrossAttnConfig(FairseqDataclass):
     attention_competition_type: str = field(default="step", metadata={"help": "competition type between heads, alternative: softmax"})
-    attention_heads_inactive: int = field(default=0, metadata={"help": "number of heads that remain active"})
+    attention_heads_inactive: int = field(default=0, metadata={"help": "number of heads that remain inactive"})
     attention_heads_signature_dim: int = field(default=24, metadata={"help": "dimension of inference space for attention heads"})
     attention_heads_inference_mlp_hidden: int = field(default=128, metadata={"help": "hidden dimension of mlp that will produce inference vectors"})
     attention_using_head_weigts: bool = field(default=False, metadata={"help": "using head weights to infer signatures"})
