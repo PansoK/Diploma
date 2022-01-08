@@ -27,6 +27,9 @@ from torch import Tensor
 #    TransformerConfig,
 #)
 from comptransformer_config import TransformerCompConfig
+import logging
+logger = logging.getLogger("fairseq.modules.multihead_atttention")
+
 
 # rewrite name for backward compatibility in `make_generation_fast_`
 def module_name_fordropout(module_name: str) -> str:
@@ -35,6 +38,8 @@ def module_name_fordropout(module_name: str) -> str:
     else:
         return module_name
 
+#import logging
+#logger = logging.getLogger(__name__)
 
 class TransformerEncoderCompBase(FairseqEncoder):
     """
@@ -203,6 +208,47 @@ class TransformerEncoderCompBase(FairseqEncoder):
         encoder_padding_mask = src_tokens.eq(self.padding_idx)
         has_pads = src_tokens.device.type == "xla" or encoder_padding_mask.any()
 
+        ############################
+        torch.set_printoptions(threshold=10_000)
+        tensors_to_watch = torch.Tensor([
+            [30, 48, 16, 32, 82, 11, 324, 62, 50, 944, 6, 4942, 20, 1580, 3031, 243, 1552, 32, 210, 145, 304, 25, 14, 4, 6, 93, 1580, 3031, 243, 1552, 49, 8, 41, 4, 75, 1299, 29, 16, 159, 39, 147, 8, 158, 66, 31, 5, 2],
+            [7, 6, 88, 92, 1029, 10, 152, 9, 360, 25, 14, 57, 6, 899, 243, 12, 7, 6, 4619, 4845, 689, 234, 27, 272, 3563, 161, 656, 10, 152, 9, 360, 1456, 14, 4, 7, 1240, 533, 766, 28, 110, 179, 10, 152, 9, 2806, 5, 2],
+            [1523, 4, 19, 17, 63, 15, 286, 2774, 7, 2633, 509, 10, 1880, 1414, 572, 433, 4, 7, 19, 17, 29, 464, 59, 13, 999, 1095, 4367, 4, 127, 936, 4, 59, 16, 1039, 8, 41, 14, 249, 4, 97, 14, 23, 2781, 4, 112, 33, 2]
+            ]).long().cuda()
+        print_data_for_seq = []
+        if src_tokens.size(1) == tensors_to_watch.size(1):
+            for i in range(tensors_to_watch.size(0)):
+                # find position in batch
+                pos = (torch.sum(torch.eq(tensors_to_watch[i].unsqueeze(0), src_tokens), dim=1)==tensors_to_watch.size(1)).nonzero(as_tuple=True)[0] # size at most equal to 1
+                if pos.size(0) == 1:  # found tensor
+                    print_data_for_seq.append([i, pos.item()])
+        if len(print_data_for_seq) == 0:
+            print_data_for_seq = None
+        else:
+            print_data_for_seq = torch.Tensor(print_data_for_seq).long().cuda()
+        if print_data_for_seq is not None:
+            logger.info("print_data_for_seq: {}".format(print_data_for_seq))
+
+        '''
+        with open('/home/panso014/diploma/code/results/2022_01_07/metrics/train_1_1_4so_4wt_4wt_tog_seq_metrics.txt', 'w') as f:
+            mydict = {'0': self.dictionary.string(tensors_to_watch[0]),
+                      '1': self.dictionary.string(tensors_to_watch[1]),
+                      '2': self.dictionary.string(tensors_to_watch[2])}
+            f.write(str(mydict) + "\n")
+        '''
+
+        '''
+        for i in range(src_tokens.size()[0]):
+            if src_tokens[0].size(0) == tensors_to_watch[0].size(0) and \
+                src_tokens[i][0] == 30 and src_tokens[i][1] == 48 and src_tokens[i][2] == 16 and src_tokens[i][3] == 32 and src_tokens[i][4] == 82:
+                logger.info(src_tokens[i])
+                logger.info(tensors_to_watch[0])
+                logger.info((torch.sum(torch.eq(tensors_to_watch[0].unsqueeze(0), src_tokens), dim=1)==tensors_to_watch.size(1)).nonzero(as_tuple=True)[0])
+                torch.save(src_tokens, '../code/src_tokens.pt')
+                torch.save(tensors_to_watch, '../code/tensors_to_watch.pt')
+        '''
+        ############################
+
         x, encoder_embedding = self.forward_embedding(src_tokens, token_embeddings)
 
         # account for padding while computing the representation
@@ -220,7 +266,8 @@ class TransformerEncoderCompBase(FairseqEncoder):
         # encoder layers
         for layer in self.layers:
             x = layer(
-                x, encoder_padding_mask=encoder_padding_mask if has_pads else None
+                x, encoder_padding_mask=encoder_padding_mask if has_pads else None,
+                print_data_for_seq=print_data_for_seq
             )
             if return_all_hiddens:
                 assert encoder_states is not None
@@ -341,7 +388,7 @@ class TransformerEncoderComp(TransformerEncoderCompBase):
             embed_tokens,
         )
 
-    def build_encoder_layer(self, args):
+    def build_encoder_layer(self, args, layer):
         return super().build_encoder_layer(
-            TransformerCompConfig.from_namespace(args),
+            TransformerCompConfig.from_namespace(args), layer
         )

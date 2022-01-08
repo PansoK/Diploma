@@ -19,6 +19,8 @@ from torch.autograd import Variable
 
 import logging
 import datetime
+import json
+import os
 logger = logging.getLogger("fairseq.modules.multihead_atttention")
 
 @with_incremental_state
@@ -177,11 +179,11 @@ class MultiheadAttentionComp(nn.Module):
             nn.init.xavier_uniform_(self.k_proj.weight, gain=1 / math.sqrt(2))
             nn.init.xavier_uniform_(self.v_proj.weight, gain=1 / math.sqrt(2))
             nn.init.xavier_uniform_(self.q_proj.weight, gain=1 / math.sqrt(2))
-            nn.init.xavier_uniform_(self.inf_fc1.weight, gain=nn.init.calculate_gain(cfg.activation_fn))
-            nn.init.xavier_uniform_(self.inf_fc2.weight, gain=nn.init.calculate_gain(cfg.activation_fn))
+            nn.init.xavier_uniform_(self.inf_fc1.weight, gain=1 / math.sqrt(2))
+            nn.init.xavier_uniform_(self.inf_fc2.weight, gain=1 / math.sqrt(2))
             if self.using_weights_for_signatures:   
-                nn.init.xavier_uniform_(self.inf_sign_fc1.weight, gain=nn.init.calculate_gain(cfg.activation_fn))   
-                nn.init.xavier_uniform_(self.inf_sign_fc2.weight, gain=nn.init.calculate_gain(cfg.activation_fn))
+                nn.init.xavier_uniform_(self.inf_sign_fc1.weight, gain=1 / math.sqrt(2))   
+                nn.init.xavier_uniform_(self.inf_sign_fc2.weight, gain=1 / math.sqrt(2))
         else:
             nn.init.xavier_uniform_(self.k_proj.weight)
             nn.init.xavier_uniform_(self.v_proj.weight)
@@ -398,6 +400,7 @@ class MultiheadAttentionComp(nn.Module):
         attn_mask: Optional[Tensor] = None,
         before_softmax: bool = False,
         need_head_weights: bool = False,
+        print_data_for_seq: Optional[Tensor] = None,
     ) -> Tuple[Tensor, Optional[Tensor]]:
         """Input shape: Time x Batch x Channel
 
@@ -415,6 +418,10 @@ class MultiheadAttentionComp(nn.Module):
             need_head_weights (bool, optional): return the attention
                 weights for each head. Implies *need_weights*. Default:
                 return the average attention weights over all heads.
+            print_data_for_seq (Tensor, optional): an [N, 2] Tensor with information
+                about the sequences for which we print metrics. It contains the sequence 
+                identifiers in the first column and the sequence position in the batch
+                in the second one.
         """
         if need_head_weights:
             need_weights = True
@@ -646,23 +653,6 @@ class MultiheadAttentionComp(nn.Module):
         assert list(attn.size()) == [bsz * self.num_heads, tgt_len, self.head_dim]
 
         ############# comp
-        toprint = False
-        check_for_type = "softmax"
-        file = "/home/panso014/diploma/code/train_1_1_4so_4wt_4wt_it_to_print.txt"
-        # dictionary to store info
-        if toprint and self.attention_competition_type == check_for_type:
-            data_dict = {"name": self.name}
-            now = datetime.datetime.now()
-            data_dict["time"] = now.strftime("%Y-%m-%d %H:%M:%S")
-        if toprint and self.attention_competition_type == check_for_type:
-            mylen = attn[0, :, 0].size()[0]
-            mybsz = attn[:, 0, 0].size()[0]
-            data_dict["Before"] = attn[min(100, mybsz-5):min(104, mybsz-1), min(5, mylen-1), :16].tolist()
-
-        attn = attn.view(
-            bsz, self.num_heads, tgt_len, self.head_dim
-        )
-
         #c = self.inference_masking(query)
         if self.attention_competition_type == "step":
             c = self.inference_masking_step(query)
@@ -673,14 +663,74 @@ class MultiheadAttentionComp(nn.Module):
         elif self.attention_competition_type == "neural_int":
             c = self.inference_masking_step_softmax_neur_inters(query)
         assert list(c.size()) == [bsz, self.num_heads, tgt_len]
+
+
+        print_train = True
+        print_valid = True
+        batch_type = None
+        print_every = 25   # either an integer or None
+        check_for_type = "softmax"
+        # if c requires grad then we are not in torch.no_grad mode, else we are
+        if c.requires_grad:
+            batch_type = "train"
+        else:
+            batch_type = "valid"
+        mylen = c[0, 0, :].size()[0]
+        is_eligible_epoch = ((print_train and batch_type == "train") or (print_valid and batch_type == "valid")) and bsz >= 20 and mylen >= 5
+        file_train = "/home/panso014/diploma/code/results/2022_01_07/roberta/train_roberta_small_iter_train.txt"
+        file_train_counter = file_train[:-4] + "_counter.json"
+        file_val = "/home/panso014/diploma/code/results/2022_01_07/roberta/train_roberta_small_iter_val.txt"
+        file_val_counter = file_val[:-4] + "_counter.json"
+        file_seq = "/home/panso014/diploma/code/results/2022_01_07/roberta/train_roberta_small_iter_seq.txt"
+
+        # check counter
+        if is_eligible_epoch and self.attention_competition_type == check_for_type and print_every != None:
+            file_counter = file_train_counter if batch_type == "train" else file_val_counter
+            if os.path.isfile(file_counter):
+                with open(file_counter, 'r') as f:
+                    counter_dict = json.load(f)
+                if self.name[1] == '0': # update counter only when at first layer
+                    counter_dict['counter'] += 1
+                counter = counter_dict['counter']
+                json_object = json.dumps(counter_dict, indent = 4)
+                with open(file_counter, "w") as f:
+                    f.write(json_object)
+            else:  # if it is the first time opening the file
+                counter_dict = {'counter': 0}
+                counter = 0
+                json_object = json.dumps(counter_dict, indent = 4)
+                with open(file_counter, 'w') as f:
+                    f.write(json_object)
+            
+
+        toprint = is_eligible_epoch and self.attention_competition_type == check_for_type and (print_every == None or counter%print_every == 0)
+
+        # dictionary to store info
+        if toprint:
+            data_dict = {"name": self.name}
+            now = datetime.datetime.now()
+            data_dict["time"] = now.strftime("%Y-%m-%d %H:%M:%S")
+        if toprint:
+            mybsz = attn[:, 0, 0].size()[0]
+            data_dict["Before"] = attn[min(100, mybsz-5):min(104, mybsz-1), 4, :16].tolist()
+
+        # if there are sequences for which we would like to save metrics create a dictionary to store them
+        if print_data_for_seq is not None:
+            seq_dict = {"name": self.name}
+            now = datetime.datetime.now()
+            seq_dict["time"] = now.strftime("%Y-%m-%d %H:%M:%S")
+            seq_dict["metrics"] = {}
+            for seq_code in print_data_for_seq[:, 0].data.tolist():
+                seq_dict["metrics"][str(seq_code)] = {}
+
+
+        attn = attn.view(
+            bsz, self.num_heads, tgt_len, self.head_dim
+        )
         
-        
-        if toprint and self.attention_competition_type == check_for_type:
-            mylen = c[0, 0, :].size()[0]
-            data_dict["Multplying in Mean (Pos: 1-5)"] = torch.mean(c[:, :, :min(5, mylen-1)], dim=0).data.tolist()
-            mybsz = c[:, 0, 0].size()[0]
-            data_dict["Multplying in Batch 25 (Pos: 5)"] = c[min(25, mybsz-1), :, min(5, mylen-1)].data.tolist()
-        #print(self.head_signatures[:, 10])
+        if toprint:
+            data_dict["Multiplying in Mean (Pos: 1-5)"] = torch.mean(c[:, :, :5], dim=0).data.tolist()
+
             if not self.using_weights_for_signatures:
                 norms = [torch.linalg.norm(self.head_signatures[i, :]).item() for i in range(self.num_heads)]
             else:
@@ -695,8 +745,7 @@ class MultiheadAttentionComp(nn.Module):
                 combos = [(i, j) for i in range(self.num_heads-1) for j in range(i+1, self.num_heads)]
                 sign_sims = [F.cosine_similarity(signatures[i, :], signatures[j, :], dim=0).item() for (i, j) in combos]
             data_dict["Sign Sims"] = sign_sims
-            mylen = attn[0, 0, :, 0].size()[0]
-            attn_sims = [torch.mean(F.cosine_similarity(attn[:, i, min(4, mylen-1), :], attn[:, j, min(4, mylen-1), :], dim=1)).item() \
+            attn_sims = [torch.mean(F.cosine_similarity(attn[:, i, 4, :], attn[:, j, 4, :], dim=1)).item() \
                 for (i, j) in combos]
             data_dict["Attn Sims (pos 4)"] = attn_sims
 
@@ -704,6 +753,16 @@ class MultiheadAttentionComp(nn.Module):
             data_dict["k_proj"] = [torch.linalg.norm(self.k_proj.weight).item(), torch.linalg.norm(self.k_proj.bias).item()]
             data_dict["inf_fc1"] = [torch.linalg.norm(self.inf_fc1.weight).item(), torch.linalg.norm(self.inf_fc1.bias).item()]
             data_dict["inf_fc2"] = [torch.linalg.norm(self.inf_fc2.weight).item(), torch.linalg.norm(self.inf_fc2.bias).item()]
+
+            data_dict["Attn Norm Before Multiplication (Pos: 1-5)"] = torch.mean(torch.linalg.norm(attn[:, :, :5, :], dim=3), dim=0).data.tolist()
+            
+        if print_data_for_seq is not None:
+            for seq_id, multipliers in enumerate(c[print_data_for_seq[:, 1], :, :6].data.tolist()):
+                #logger.info("multipliers: {} {}".format(len(multipliers), len(multipliers[0])))
+                seq_dict["metrics"][str(print_data_for_seq[seq_id, 0].item())]["Multipliers"] = multipliers
+            for seq_id, norms_bef in enumerate(torch.linalg.norm(attn[print_data_for_seq[:, 1], :, :6, :], dim=3).data.tolist()):
+                #logger.info("norms before {} {}".format(len(norms_bef), len(norms_bef[0])))
+                seq_dict["metrics"][str(print_data_for_seq[seq_id, 0].item())]["Norms Before"] = norms_bef
         
 
         #attn = attn.masked_fill(
@@ -712,18 +771,30 @@ class MultiheadAttentionComp(nn.Module):
         #)
         attn = torch.mul(attn, c.unsqueeze(3))  # applying masking
 
+        if toprint:
+            data_dict["Attn Norm After Multiplication (Pos: 1-5)"] = torch.mean(torch.linalg.norm(attn[:, :, :5, :], dim=3), dim=0).data.tolist()
+
+        if print_data_for_seq is not None:
+            for seq_id, norms_aft in enumerate(torch.linalg.norm(attn[print_data_for_seq[:, 1], :, :6, :], dim=3).data.tolist()):
+                #logger.info("norms after {} {}".format(len(norms_aft), len(norms_aft[0])))
+                seq_dict["metrics"][str(print_data_for_seq[seq_id, 0].item())]["Norms After"] = norms_aft
+
         attn = attn.view(
             bsz*self.num_heads, tgt_len, self.head_dim
         )
 
-        if toprint and self.attention_competition_type == check_for_type:
-            mylen = attn[0, :, 0].size()[0]
+        if toprint:
             mybsz = attn[:, 0, 0].size()[0]
-            data_dict["After"] = attn[min(100, mybsz-5):min(104, mybsz-1), min(5, mylen-1), :16].tolist()
+            data_dict["After"] = attn[min(100, mybsz-5):min(104, mybsz-1), 4, :16].tolist()
 
-        if toprint and self.attention_competition_type == check_for_type:
-            with open(file,'a', encoding = 'utf-8') as f:
+
+        if toprint:
+            with open(file_train if batch_type == "train" else file_val,'a', encoding = 'utf-8') as f:
                 f.write(str(data_dict) + "\n")
+
+        if print_data_for_seq is not None:
+            with open(file_seq,'a', encoding = 'utf-8') as f:
+                f.write(str(seq_dict) + "\n")
         #############
 
         if self.onnx_trace and attn.size(1) == 1:

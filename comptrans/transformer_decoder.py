@@ -480,7 +480,7 @@ class TransformerDecoderComp(TransformerDecoderCompBase):
             TransformerCompConfig.from_namespace(args), dictionary, embed_tokens
         )
 
-    def build_decoder_layer(self, args, no_encoder_attn=False):
+    def build_decoder_layer(self, args, layer, no_encoder_attn=False):
         return super().build_decoder_layer(
-            TransformerCompConfig.from_namespace(args), no_encoder_attn=no_encoder_attn
+            TransformerCompConfig.from_namespace(args), layer, no_encoder_attn=no_encoder_attn
         )

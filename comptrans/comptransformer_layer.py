@@ -84,6 +84,7 @@ class TransformerEncoderLayerCompBase(nn.Module):
         )
 
         # https://github.com/pytorch/pytorch/issues/54147
+        CHECK THIS OUT FIRST nn.Linear(embed_dim, output_dim, bias=False).weight (https://github.com/pytorch/fairseq/blob/00b6adfbdc58d473c9039a96c124e75f922e3808/fairseq/models/roberta/model.py#L366)
         self.fc1 = nn.Parameter(torch.Tensor(
             self.parallel_ffns,
             self.embed_dim+1,
@@ -214,6 +215,7 @@ class TransformerEncoderLayerCompBase(nn.Module):
         x,
         encoder_padding_mask: Optional[Tensor],
         attn_mask: Optional[Tensor] = None,
+        print_data_for_seq: Optional[Tensor] = None,
     ):
         """
         Args:
@@ -226,6 +228,10 @@ class TransformerEncoderLayerCompBase(nn.Module):
                 `attn_mask[tgt_i, src_j] = 1` means that when calculating the
                 embedding for `tgt_i`, we exclude (mask out) `src_j`. This is
                 useful for strided self-attention.
+            print_data_for_seq (Tensor, optional): an [N, 2] Tensor with information
+                about the sequences for which we print metrics. It contains the sequence 
+                identifiers in the first column and the sequence position in the batch
+                in the second one.
 
         Returns:
             encoded output of shape `(seq_len, batch, embed_dim)`
@@ -254,6 +260,7 @@ class TransformerEncoderLayerCompBase(nn.Module):
             key_padding_mask=encoder_padding_mask,
             need_weights=False,
             attn_mask=attn_mask,
+            print_data_for_seq=print_data_for_seq,
         )
         x = self.dropout_module(x)
         x = self.residual_connection(x, residual)
@@ -308,8 +315,8 @@ class TransformerEncoderLayerCompBase(nn.Module):
         x = self.activation_dropout_module(x)
         x = self.fc2(x)
         '''
-        with open("/home/panso014/diploma/code/train_1_1_4so_4wt_4wt_it_to_print.txt",'a', encoding = 'utf-8') as f:
-            data_dict = {"name": ("encoder", self.layer)}
+        with open("/home/panso014/diploma/code/train_1_1_4so_4wt_4wt_iter_3_to_print.txt",'a', encoding = 'utf-8') as f:
+            data_dict = {"name": ("encoder_layer", self.layer)}
             now = datetime.datetime.now()
             data_dict["time"] = now.strftime("%Y-%m-%d %H:%M:%S")
             data_dict["fc1"] = [torch.linalg.norm(self.fc1.weight).item(), torch.linalg.norm(self.fc1.bias).item()]
@@ -606,6 +613,7 @@ class TransformerDecoderLayerCompBase(nn.Module):
         self_attn_padding_mask: Optional[torch.Tensor] = None,
         need_attn: bool = False,
         need_head_weights: bool = False,
+        print_data_for_seq: Optional[Tensor] = None,
     ):
         """
         Args:
@@ -616,6 +624,10 @@ class TransformerDecoderLayerCompBase(nn.Module):
             need_attn (bool, optional): return attention weights
             need_head_weights (bool, optional): return attention weights
                 for each head (default: return average over heads).
+            print_data_for_seq (Tensor, optional): an [N, 2] Tensor with information
+                about the sequences for which we print metrics. It contains the sequence 
+                identifiers in the first column and the sequence position in the batch
+                in the second one.
 
         Returns:
             encoded output of shape `(seq_len, batch, embed_dim)`
@@ -671,6 +683,7 @@ class TransformerDecoderLayerCompBase(nn.Module):
             incremental_state=incremental_state,
             need_weights=False,
             attn_mask=self_attn_mask,
+            print_data_for_seq=print_data_for_seq,
         )
         if self.c_attn is not None:
             tgt_len, bsz = x.size(0), x.size(1)
@@ -708,6 +721,7 @@ class TransformerDecoderLayerCompBase(nn.Module):
                 static_kv=True,
                 need_weights=need_attn or (not self.training and self.need_attn),
                 need_head_weights=need_head_weights,
+                print_data_for_seq=print_data_for_seq,
             )
             x = self.dropout_module(x)
             x = self.residual_connection(x, residual)
